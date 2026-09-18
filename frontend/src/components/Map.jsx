@@ -3,7 +3,7 @@ import mapboxgl from 'mapbox-gl';
 import 'mapbox-gl/dist/mapbox-gl.css';
 
 // TODO: Insert your Mapbox token here
-mapboxgl.accessToken = 'YOUR_MAPBOX_ACCESS_TOKEN';
+mapboxgl.accessToken = import.meta.env.VITE_MAPBOX_TOKEN;
 
 const Map = () => {
   const mapContainer = useRef(null);
