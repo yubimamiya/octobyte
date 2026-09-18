@@ -1,0 +1,39 @@
+# =========================
+# Python / Backend
+# =========================
+# Virtual environments
+octobyte_venv/
+.octobyte_venv/
+venv/
+.venv/
+env/
+ENV/
+
+# Python cache files
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+
+# =========================
+# Node / Frontend
+# =========================
+node_modules/
+dist/
+build/
+npm-debug.log*
+
+# =========================
+# Secrets & Environment Variables
+# =========================
+.env
+.env.local
+.env.*.local
+
+# =========================
+# OS / Editor Files
+# =========================
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
