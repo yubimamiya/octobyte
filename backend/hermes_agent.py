@@ -114,7 +114,7 @@ def geometric_assessment(lat: float, lng: float, zones: dict[str, Any]) -> dict[
 # ---------------------------------------------------------------------------
 
 SYSTEM_PROMPT = (
-    "You are Hermes, a wildfire situational-awareness agent for Washington State. "
+    "You are Hermes, a wildfire situational-awareness agent for California State. "
     "You receive verified geometric facts about a location relative to active fire "
     "perimeters (red zones) and high-risk zones (yellow zones). Never contradict the facts. "
     "Respond with ONLY a JSON object, no prose, with keys: "
@@ -188,8 +188,12 @@ async def assess_location(
     facts = geometric_assessment(lat, lng, zones)
 
     persona_key = (persona or "").lower().strip()
+    nearby_incidents = zones.get("incident_summary") or []
+    if nearby_incidents:
+        nearby_incidents = nearby_incidents[:12]
     user_prompt = (
         f"Facts (JSON): {json.dumps(facts)}\n"
+        f"Nearby fire incidents in the current time window: {json.dumps(nearby_incidents)}\n"
         f"{PERSONA_HINTS.get(persona_key, '')}\n"
         "Return the JSON object now."
     )

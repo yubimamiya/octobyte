@@ -44,7 +44,7 @@ client = AsyncOpenAI(
 hermes_client = make_hermes_client()
 
 BASE_SYSTEM_PROMPT = (
-    "You are a crisis-response AI agent for a wildfire emergency in Washington State. "
+    "You are a crisis-response AI agent for a wildfire emergency in California State. "
     "Use simple, plain-language steps. Provide verified, personalized guidance based on the "
     "user's persona (citizen, caregiver, firefighter)."
 )
@@ -106,8 +106,9 @@ async def websocket_endpoint(websocket: WebSocket):
             data = fetch_and_process_fire_data()
             data["simulated_time"] = clock.isoformat()
             await websocket.send_json(data)
-            # Fetch and update every 10 seconds (simulated live feed)
-            await asyncio.sleep(10)
+            # Match the simulated app cadence: refresh every two minutes and
+            # include the +/- 2 minute incident window around the current time.
+            await asyncio.sleep(120)
     except WebSocketDisconnect:
         print("Client disconnected")
 
