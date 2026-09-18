@@ -76,8 +76,9 @@ const AssessmentPanel = ({ assessment, loading, error, point }) => {
       </div>
       {point && (
         <p className="text-xs text-gray-400 mb-2">
+          {point.label ? `${point.label} · ` : ''}
           {point.lat.toFixed(3)}, {point.lng.toFixed(3)}
-          {MAPBOX_TOKEN ? ' · click the map to check another spot' : ''}
+          {MAPBOX_TOKEN ? ' · click the map or search to check another spot' : ''}
         </p>
       )}
       {loading && <p className="text-gray-300">Analyzing fire data…</p>}
@@ -98,6 +99,81 @@ const AssessmentPanel = ({ assessment, loading, error, point }) => {
             {assessment.source === 'hermes' ? assessment.model : 'offline fallback'}
           </p>
         </>
+      )}
+    </div>
+  );
+};
+
+// Mapbox geocoding search box. Selecting a result reports it via onSelect.
+const LocationSearch = ({ onSelect }) => {
+  const [query, setQuery] = useState('');
+  const [results, setResults] = useState([]);
+  const [isSearching, setIsSearching] = useState(false);
+  const [searchError, setSearchError] = useState('');
+
+  const searchLocation = async (event) => {
+    event?.preventDefault();
+    const trimmedQuery = query.trim();
+    if (!trimmedQuery) return;
+
+    setIsSearching(true);
+    setSearchError('');
+    try {
+      const response = await fetch(
+        `https://api.mapbox.com/geocoding/v5/mapbox.places/${encodeURIComponent(trimmedQuery)}.json?access_token=${MAPBOX_TOKEN}&limit=5`,
+      );
+      if (!response.ok) throw new Error('Location search failed');
+      const data = await response.json();
+      setResults(data.features || []);
+      if (!data.features?.length) setSearchError('No locations found');
+    } catch (error) {
+      setResults([]);
+      setSearchError(error.message);
+    } finally {
+      setIsSearching(false);
+    }
+  };
+
+  const selectLocation = (location) => {
+    const [longitude, latitude] = location.center;
+    onSelect({ lng: longitude, lat: latitude, label: location.place_name });
+    setQuery(location.place_name);
+    setResults([]);
+    setSearchError('');
+  };
+
+  return (
+    <div className="absolute top-4 right-4 z-10 w-[min(360px,calc(100%-2rem))]">
+      <form onSubmit={searchLocation} className="flex gap-2 rounded-lg bg-slate-900/95 p-2 shadow-xl">
+        <input
+          value={query}
+          onChange={(event) => setQuery(event.target.value)}
+          placeholder="Search a location"
+          aria-label="Search a location"
+          className="min-w-0 flex-1 rounded bg-slate-700 px-3 py-2 text-sm text-white outline-none placeholder:text-slate-400 focus:ring-2 focus:ring-orange-500"
+        />
+        <button
+          type="submit"
+          disabled={isSearching || !query.trim()}
+          className="rounded bg-orange-600 px-3 py-2 text-sm font-semibold text-white transition-colors hover:bg-orange-500 disabled:cursor-not-allowed disabled:opacity-50"
+        >
+          {isSearching ? '...' : 'Search'}
+        </button>
+      </form>
+      {searchError && <p className="mt-1 rounded bg-red-950/95 px-3 py-2 text-xs text-red-200">{searchError}</p>}
+      {results.length > 0 && (
+        <div className="mt-1 overflow-hidden rounded-lg bg-slate-900/95 shadow-xl">
+          {results.map((location) => (
+            <button
+              type="button"
+              key={location.id}
+              onClick={() => selectLocation(location)}
+              className="block w-full border-b border-slate-700 px-3 py-2 text-left text-sm text-slate-200 last:border-0 hover:bg-slate-700"
+            >
+              {location.place_name}
+            </button>
+          ))}
+        </div>
       )}
     </div>
   );
@@ -142,6 +218,31 @@ const Map = ({ persona }) => {
   useEffect(() => {
     assess(point);
   }, [point, assess]);
+
+  // Move the marker (and optional popup) to a location and assess it.
+  const focusLocation = useCallback(({ lng, lat, label }) => {
+    const map = mapRef.current;
+    if (map && markerRef.current) {
+      markerRef.current.setLngLat([lng, lat]);
+      const popup = markerRef.current.getPopup();
+      if (label) {
+        (popup || markerRef.current.setPopup(new mapboxgl.Popup({ offset: 24 })).getPopup()).setText(label);
+        if (!markerRef.current.getPopup().isOpen()) markerRef.current.togglePopup();
+      } else if (popup?.isOpen()) {
+        markerRef.current.togglePopup();
+      }
+    }
+    setPoint({ lng, lat, label });
+  }, []);
+
+  // A search result flies the map there before assessing.
+  const handleSearchSelect = useCallback(
+    (location) => {
+      mapRef.current?.flyTo({ center: [location.lng, location.lat], zoom: 11, essential: true });
+      focusLocation(location);
+    },
+    [focusLocation]
+  );
 
   useEffect(() => {
     if (!MAPBOX_TOKEN || !mapContainer.current) return undefined;
@@ -193,8 +294,7 @@ const Map = ({ persona }) => {
     // Clicking the map asks Hermes about that spot.
     map.on('click', (event) => {
       const { lng, lat } = event.lngLat;
-      markerRef.current?.setLngLat([lng, lat]);
-      setPoint({ lng, lat });
+      focusLocation({ lng, lat });
     });
 
     return () => {
@@ -204,10 +304,12 @@ const Map = ({ persona }) => {
         ws.onclose = null;
         ws.close();
       }
+      markerRef.current?.remove();
+      markerRef.current = null;
       map.remove();
       mapRef.current = null;
     };
-  }, []);
+  }, [focusLocation]);
 
   const panel = <AssessmentPanel assessment={assessment} loading={loading} error={error} point={point} />;
 
@@ -227,7 +329,8 @@ const Map = ({ persona }) => {
 
   return (
     <div className="relative w-full h-full">
-      <div ref={mapContainer} className="w-full h-full" />
+      <LocationSearch onSelect={handleSearchSelect} />
+      <div ref={mapContainer} className="h-full w-full" />
       {panel}
     </div>
   );
