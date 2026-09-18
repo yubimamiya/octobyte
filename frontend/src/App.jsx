@@ -1,6 +1,7 @@
 import React, { useState } from 'react';
 import Map from './components/Map';
 import Chatbot from './components/Chatbot';
+import hotspotterLogo from './assets/hotspotter-logo.png';
 
 const PERSONAS = [
   { id: 'citizen', label: '👤 Citizen' },
@@ -18,7 +19,10 @@ function App() {
         <Map persona={persona} />
         {/* Persona Selector */}
         <div className="absolute top-4 left-4 bg-slate-800 p-4 rounded-lg shadow-lg z-10">
-          <h1 className="text-xl font-bold mb-2 text-orange-500">LiveFire Agent</h1>
+          <div className="mb-2 flex items-center gap-2">
+            <img src={hotspotterLogo} alt="Hotspotter logo" className="h-9 w-9 rounded object-contain" />
+            <h1 className="text-xl font-bold text-orange-500">Hotspotter</h1>
+          </div>
           <p className="text-sm text-gray-300">Simulating: Camp Fire, Paradise CA (Nov 8, 2018)</p>
           <div className="mt-4 flex flex-col gap-2">
             {PERSONAS.map((p) => (
@@ -27,9 +31,8 @@ function App() {
                 type="button"
                 onClick={() => setPersona(p.id)}
                 aria-pressed={persona === p.id}
-                className={`px-3 py-1 rounded text-left transition-colors ${
-                  persona === p.id ? 'bg-orange-600 text-white' : 'bg-slate-700 hover:bg-slate-600'
-                }`}
+                className={`px-3 py-1 rounded text-left transition-colors ${persona === p.id ? 'bg-orange-600 text-white' : 'bg-slate-700 hover:bg-slate-600'
+                  }`}
               >
                 {p.label}
               </button>

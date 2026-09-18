@@ -11,6 +11,7 @@ const RECONNECT_MS = 3000;
 const DEFAULT_CENTER = { lng: -121.62, lat: 39.76 };
 const DEFAULT_ZOOM = 12;
 const INITIAL_SIMULATED_TIME = '2018-11-08T11:00:00';
+const DIRECTIONS_URL = 'https://api.mapbox.com/directions/v5/mapbox/driving';
 
 // Backend zones are [{id, coordinates: [[lng, lat], ...]}]. Convert to a GeoJSON
 // FeatureCollection of polygons, closing each ring as GeoJSON requires.
@@ -102,6 +103,35 @@ const addHotspotLayers = (map) => {
     paint: { 'circle-color': '#ef4444', 'circle-radius': 7, 'circle-stroke-color': '#450a0a', 'circle-stroke-width': 2 },
   });
 };
+
+const routeGeoJSON = (geometry) => ({
+  type: 'Feature',
+  properties: {},
+  geometry,
+});
+
+const emptyRouteGeoJSON = () => ({ type: 'FeatureCollection', features: [] });
+
+const distanceSquared = (first, second) => {
+  const latitudeScale = Math.cos((first[1] * Math.PI) / 180);
+  const longitudeDistance = (first[0] - second[0]) * latitudeScale;
+  const latitudeDistance = first[1] - second[1];
+  return longitudeDistance ** 2 + latitudeDistance ** 2;
+};
+
+const routeFireRisk = (route, firePoints) => {
+  const coordinates = route.geometry?.coordinates || [];
+  if (!coordinates.length || !firePoints.length) return 0;
+  return Math.min(
+    ...firePoints.map((point) =>
+      Math.min(...coordinates.map((coordinate) => distanceSquared(coordinate, point)))
+    )
+  );
+};
+
+const chooseSafestRoute = (routes, firePoints) => routes
+  .map((route, index) => ({ route, index, fireRisk: routeFireRisk(route, firePoints) }))
+  .sort((first, second) => second.fireRisk - first.fireRisk)[0];
 
 const formatSimulatedTime = (value) => {
   if (!value) return 'Waiting for backend clock...';
@@ -242,6 +272,109 @@ const LocationSearch = ({ onSelect }) => {
   );
 };
 
+const RouteSearch = ({ onSearch, onRoute }) => {
+  const [meQuery, setMeQuery] = useState('');
+  const [destinationQuery, setDestinationQuery] = useState('');
+  const [meLocation, setMeLocation] = useState(null);
+  const [destinationLocation, setDestinationLocation] = useState(null);
+  const [results, setResults] = useState({ field: null, locations: [] });
+  const [isSearching, setIsSearching] = useState(false);
+  const [isRouting, setIsRouting] = useState(false);
+  const [error, setError] = useState('');
+
+  const geocode = async (query, field) => {
+    const response = await fetch(
+      `https://api.mapbox.com/geocoding/v5/mapbox.places/${encodeURIComponent(query)}.json?access_token=${MAPBOX_TOKEN}&limit=5`,
+    );
+    if (!response.ok) throw new Error('Location search failed');
+    const data = await response.json();
+    setResults({ field, locations: data.features || [] });
+    if (!data.features?.length) throw new Error('No locations found');
+  };
+
+  const searchField = async (field) => {
+    const query = field === 'me' ? meQuery.trim() : destinationQuery.trim();
+    if (!query) return;
+    setIsSearching(true);
+    setError('');
+    try {
+      await geocode(query, field);
+    } catch (searchError) {
+      setResults({ field: null, locations: [] });
+      setError(searchError.message);
+    } finally {
+      setIsSearching(false);
+    }
+  };
+
+  const selectLocation = (location) => {
+    const selected = { lng: location.center[0], lat: location.center[1], label: location.place_name };
+    if (results.field === 'me') {
+      setMeQuery(location.place_name);
+      setMeLocation(selected);
+    } else {
+      setDestinationQuery(location.place_name);
+      setDestinationLocation(selected);
+    }
+    setResults({ field: null, locations: [] });
+    setError('');
+  };
+
+  const submitSearch = async (event) => {
+    event.preventDefault();
+    if (meLocation || destinationLocation) {
+      onSearch(meLocation || destinationLocation);
+      return;
+    }
+    await searchField('me');
+  };
+
+  const submitRoute = async () => {
+    if (!meLocation || !destinationLocation) return;
+    setIsRouting(true);
+    setError('');
+    try {
+      await onRoute(meLocation, destinationLocation);
+    } catch (routeError) {
+      setError(routeError.message);
+    } finally {
+      setIsRouting(false);
+    }
+  };
+
+  const resultList = results.locations.length > 0 && (
+    <div className="mt-1 overflow-hidden rounded-lg bg-slate-900/95 shadow-xl">
+      {results.locations.map((location) => (
+        <button
+          type="button"
+          key={location.id}
+          onClick={() => selectLocation(location)}
+          className="block w-full border-b border-slate-700 px-3 py-2 text-left text-sm text-slate-200 last:border-0 hover:bg-slate-700"
+        >
+          {location.place_name}
+        </button>
+      ))}
+    </div>
+  );
+
+  return (
+    <div className="absolute top-4 right-4 z-10 w-[min(390px,calc(100%-2rem))] rounded-lg bg-slate-900/95 p-2 shadow-xl">
+      <form onSubmit={submitSearch} className="space-y-2">
+        <input value={meQuery} onChange={(event) => { setMeQuery(event.target.value); setMeLocation(null); }} onBlur={() => searchField('me')} placeholder="Me: enter an address" aria-label="Your location" className="w-full rounded bg-slate-700 px-3 py-2 text-sm text-white outline-none placeholder:text-slate-400 focus:ring-2 focus:ring-orange-500" />
+        {results.field === 'me' && resultList}
+        <input value={destinationQuery} onChange={(event) => { setDestinationQuery(event.target.value); setDestinationLocation(null); }} onBlur={() => searchField('destination')} placeholder="Destination: enter an address" aria-label="Destination location" className="w-full rounded bg-slate-700 px-3 py-2 text-sm text-white outline-none placeholder:text-slate-400 focus:ring-2 focus:ring-orange-500" />
+        {results.field === 'destination' && resultList}
+        <div className="flex gap-2">
+          <button type="submit" disabled={isSearching || (!meQuery.trim() && !destinationQuery.trim())} className="flex-1 rounded bg-orange-600 px-3 py-2 text-sm font-semibold text-white hover:bg-orange-500 disabled:cursor-not-allowed disabled:opacity-50">{isSearching ? 'Searching...' : 'Search'}</button>
+          <button type="button" onClick={submitRoute} disabled={isRouting || !meLocation || !destinationLocation} className="flex-1 rounded bg-emerald-600 px-3 py-2 text-sm font-semibold text-white hover:bg-emerald-500 disabled:cursor-not-allowed disabled:opacity-50">{isRouting ? 'Routing...' : 'Route'}</button>
+        </div>
+      </form>
+      {error && <p className="mt-2 rounded bg-red-950/95 px-3 py-2 text-xs text-red-200">{error}</p>}
+      <p className="mt-2 text-[11px] text-slate-400">Search one address for fire risk, or set both addresses for a safer street route.</p>
+    </div>
+  );
+};
+
 const Map = ({ persona }) => {
   const mapContainer = useRef(null);
   const markerRef = useRef(null);
@@ -253,6 +386,16 @@ const Map = ({ persona }) => {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState(null);
   const [simulatedTime, setSimulatedTime] = useState(INITIAL_SIMULATED_TIME);
+  const [routeStatus, setRouteStatus] = useState('');
+  const firePointsRef = useRef([]);
+
+  const setFirePoints = (data) => {
+    const collections = hotspotCollections(data);
+    const hotspotPoints = collections.red.features.map((feature) => feature.geometry.coordinates);
+    const zonePoints = (data.red_zones || []).flatMap((zone) => zone.coordinates || []);
+    firePointsRef.current = [...hotspotPoints, ...zonePoints];
+    return collections;
+  };
 
   useEffect(() => {
     let disposed = false;
@@ -310,13 +453,6 @@ const Map = ({ persona }) => {
     const map = mapRef.current;
     if (map && markerRef.current) {
       markerRef.current.setLngLat([lng, lat]);
-      const popup = markerRef.current.getPopup();
-      if (label) {
-        (popup || markerRef.current.setPopup(new mapboxgl.Popup({ offset: 24 })).getPopup()).setText(label);
-        if (!markerRef.current.getPopup().isOpen()) markerRef.current.togglePopup();
-      } else if (popup?.isOpen()) {
-        markerRef.current.togglePopup();
-      }
     }
     setPoint({ lng, lat, label });
   }, []);
@@ -329,6 +465,29 @@ const Map = ({ persona }) => {
     },
     [focusLocation]
   );
+
+  const buildSafeRoute = useCallback(async (origin, destination) => {
+    const coordinates = `${origin.lng},${origin.lat};${destination.lng},${destination.lat}`;
+    const response = await fetch(
+      `${DIRECTIONS_URL}/${coordinates}?alternatives=true&geometries=geojson&overview=full&steps=true&access_token=${MAPBOX_TOKEN}`,
+    );
+    if (!response.ok) throw new Error('Street routing failed');
+    const data = await response.json();
+    if (!data.routes?.length) throw new Error('No driving route found');
+
+    const selected = chooseSafestRoute(data.routes, firePointsRef.current);
+    mapRef.current?.getSource('safe-route')?.setData(routeGeoJSON(selected.route.geometry));
+    mapRef.current?.fitBounds(
+      [[origin.lng, origin.lat], [destination.lng, destination.lat]],
+      { padding: 100, duration: 1000 },
+    );
+    focusLocation(origin);
+    setRouteStatus(
+      firePointsRef.current.length
+        ? `Safest street route selected from ${data.routes.length} options, avoiding red fire data.`
+        : 'Street route selected. No red fire points are available in the current feed.',
+    );
+  }, [focusLocation]);
 
   useEffect(() => {
     if (!MAPBOX_TOKEN || !mapContainer.current) return undefined;
@@ -352,7 +511,7 @@ const Map = ({ persona }) => {
       const yellow = map.getSource('yellow-zones');
       if (red) red.setData(zonesToGeoJSON(data.red_zones));
       if (yellow) yellow.setData(zonesToGeoJSON(data.yellow_zones));
-      const hotspots = hotspotCollections(data);
+      const hotspots = setFirePoints(data);
       map.getSource('red-hotspots')?.setData(hotspots.red);
       map.getSource('yellow-hotspots')?.setData(hotspots.yellow);
     };
@@ -376,6 +535,14 @@ const Map = ({ persona }) => {
     map.on('load', () => {
       addZoneLayers(map);
       addHotspotLayers(map);
+      map.addSource('safe-route', { type: 'geojson', data: emptyRouteGeoJSON() });
+      map.addLayer({
+        id: 'safe-route-line',
+        type: 'line',
+        source: 'safe-route',
+        layout: { 'line-cap': 'round', 'line-join': 'round' },
+        paint: { 'line-color': '#38bdf8', 'line-width': 5, 'line-opacity': 0.9 },
+      });
       connect();
       markerRef.current = new mapboxgl.Marker({ color: '#f97316' })
         .setLngLat([DEFAULT_CENTER.lng, DEFAULT_CENTER.lat])
@@ -427,9 +594,10 @@ const Map = ({ persona }) => {
 
   return (
     <div className="relative w-full h-full">
-      <LocationSearch onSelect={handleSearchSelect} />
+      <RouteSearch onSearch={handleSearchSelect} onRoute={buildSafeRoute} />
       {clockBadge}
       <div ref={mapContainer} className="h-full w-full" />
+      {routeStatus && <div className="absolute bottom-4 right-4 z-20 mb-14 max-w-sm rounded-lg bg-slate-900/95 px-3 py-2 text-xs text-sky-200 shadow-xl">{routeStatus}</div>}
       {panel}
     </div>
   );
