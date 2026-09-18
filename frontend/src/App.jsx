@@ -15,7 +15,7 @@ function App() {
     <div className="flex h-screen w-full bg-slate-900 text-white overflow-hidden">
       {/* Map Section (Left) */}
       <div className="flex-grow relative">
-        <Map />
+        <Map persona={persona} />
         {/* Persona Selector */}
         <div className="absolute top-4 left-4 bg-slate-800 p-4 rounded-lg shadow-lg z-10">
           <h1 className="text-xl font-bold mb-2 text-orange-500">LiveFire Agent</h1>

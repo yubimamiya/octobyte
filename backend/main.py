@@ -9,6 +9,7 @@ import json
 from openai import AsyncOpenAI
 from dotenv import load_dotenv
 from fire_data import fetch_and_process_fire_data
+from hermes_agent import assess_location, make_client as make_hermes_client, HERMES_MODEL
 
 # Load OPENROUTER_API_KEY (and any other secrets) from backend/.env for local dev.
 # On Render the variable is set in the dashboard, so this is a no-op there.
@@ -38,6 +39,9 @@ client = AsyncOpenAI(
     api_key=os.getenv("OPENROUTER_API_KEY", "your-openrouter-key")
 )
 
+# Hermes situational-awareness agent (reads fire data, judges wildfire risk at a location).
+hermes_client = make_hermes_client()
+
 BASE_SYSTEM_PROMPT = (
     "You are a crisis-response AI agent for a wildfire emergency in Washington State. "
     "Use simple, plain-language steps. Provide verified, personalized guidance based on the "
@@ -56,6 +60,12 @@ PERSONA_GUIDANCE = {
 # along with extra fields (id, trigger, messageId). Pydantic ignores the extras.
 class ChatRequest(BaseModel):
     messages: list[dict[str, Any]]
+    persona: Optional[str] = None
+
+
+class AssessRequest(BaseModel):
+    lat: float
+    lng: float
     persona: Optional[str] = None
 
 
@@ -134,6 +144,21 @@ async def chat_endpoint(request: ChatRequest):
 
     return StreamingResponse(generate(), media_type="text/plain; charset=utf-8")
 
+@app.post("/api/assess")
+async def assess_endpoint(request: AssessRequest):
+    """
+    Hermes agent: is there a wildfire at / near this location?
+    Deterministic geometry decides; Hermes writes the guidance. Always returns JSON.
+    """
+    zones = fetch_and_process_fire_data()
+    return await assess_location(
+        hermes_client,
+        lat=request.lat,
+        lng=request.lng,
+        zones=zones,
+        persona=request.persona,
+    )
+
 @app.get("/")
 def read_root():
-    return {"status": "Backend is running live", "model": MODEL}
+    return {"status": "Backend is running live", "model": MODEL, "hermes_model": HERMES_MODEL}
