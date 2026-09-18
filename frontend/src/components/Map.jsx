@@ -8,6 +8,7 @@ const CHAT_URL = import.meta.env.VITE_API_URL || 'http://localhost:8000/api/chat
 const ASSESS_URL = import.meta.env.VITE_ASSESS_URL || CHAT_URL.replace(/\/api\/chat\/?$/, '/api/assess');
 const RECONNECT_MS = 3000;
 const DEFAULT_CENTER = { lng: -120.11, lat: 48.36 }; // Washington State
+const INITIAL_SIMULATED_TIME = '2018-11-08T11:00:00';
 
 // Backend zones are [{id, coordinates: [[lng, lat], ...]}]. Convert to a GeoJSON
 // FeatureCollection of polygons, closing each ring as GeoJSON requires.
@@ -48,6 +49,66 @@ const addZoneLayers = (map) => {
       source,
       paint: { 'line-color': color, 'line-width': 2 },
     });
+  });
+};
+
+const hotspotsToGeoJSON = (hotspots = []) => ({
+  type: 'FeatureCollection',
+  features: hotspots.flatMap((hotspot, index) => {
+    const latitude = Number(hotspot.latitude ?? hotspot.lat ?? hotspot.attr_InitialLatitude);
+    const longitude = Number(hotspot.longitude ?? hotspot.lon ?? hotspot.lng ?? hotspot.attr_InitialLongitude);
+    if (!Number.isFinite(latitude) || !Number.isFinite(longitude)) return [];
+    return [{
+      type: 'Feature',
+      properties: { ...hotspot, id: hotspot.id ?? hotspot.OBJECTID ?? `hotspot-${index}` },
+      geometry: { type: 'Point', coordinates: [longitude, latitude] },
+    }];
+  }),
+});
+
+const hotspotCollections = (data) => {
+  if (Array.isArray(data.red_hotspots) || Array.isArray(data.yellow_hotspots)) {
+    return {
+      red: hotspotsToGeoJSON(data.red_hotspots || []),
+      yellow: hotspotsToGeoJSON(data.yellow_hotspots || []),
+    };
+  }
+
+  const records = Array.isArray(data.hotspots) ? data.hotspots : Array.isArray(data.records) ? data.records : [];
+  const red = [];
+  const yellow = [];
+  records.forEach((record) => {
+    const classification = String(record.color ?? record.status ?? record.classification ?? '').toLowerCase();
+    (classification === 'red' || classification === 'confirmed' ? red : yellow).push(record);
+  });
+  return { red: hotspotsToGeoJSON(red), yellow: hotspotsToGeoJSON(yellow) };
+};
+
+const addHotspotLayers = (map) => {
+  map.addSource('red-hotspots', { type: 'geojson', data: hotspotsToGeoJSON([]) });
+  map.addSource('yellow-hotspots', { type: 'geojson', data: hotspotsToGeoJSON([]) });
+  map.addLayer({
+    id: 'yellow-hotspots',
+    type: 'circle',
+    source: 'yellow-hotspots',
+    paint: { 'circle-color': '#facc15', 'circle-radius': 6, 'circle-stroke-color': '#713f12', 'circle-stroke-width': 2 },
+  });
+  map.addLayer({
+    id: 'red-hotspots',
+    type: 'circle',
+    source: 'red-hotspots',
+    paint: { 'circle-color': '#ef4444', 'circle-radius': 7, 'circle-stroke-color': '#450a0a', 'circle-stroke-width': 2 },
+  });
+};
+
+const formatSimulatedTime = (value) => {
+  if (!value) return 'Waiting for backend clock...';
+  return new Date(value).toLocaleString([], {
+    year: 'numeric',
+    month: 'short',
+    day: 'numeric',
+    hour: 'numeric',
+    minute: '2-digit',
   });
 };
 
@@ -189,6 +250,29 @@ const Map = ({ persona }) => {
   const [assessment, setAssessment] = useState(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState(null);
+  const [simulatedTime, setSimulatedTime] = useState(INITIAL_SIMULATED_TIME);
+
+  useEffect(() => {
+    let disposed = false;
+
+    const updateClock = async () => {
+      try {
+        const response = await fetch(`${CHAT_URL.replace(/\/api\/chat\/?$/, '')}/api/time`);
+        if (!response.ok) return;
+        const data = await response.json();
+        if (!disposed) setSimulatedTime(data.simulated_time);
+      } catch {
+        // The websocket update will provide the clock when the backend is connected.
+      }
+    };
+
+    updateClock();
+    const interval = window.setInterval(updateClock, 60000);
+    return () => {
+      disposed = true;
+      window.clearInterval(interval);
+    };
+  }, []);
 
   // Ask the Hermes agent about a location. Latest request wins.
   const assess = useCallback(
@@ -261,10 +345,14 @@ const Map = ({ persona }) => {
     let disposed = false;
 
     const applyZones = (data) => {
+      if (data.simulated_time) setSimulatedTime(data.simulated_time);
       const red = map.getSource('red-zones');
       const yellow = map.getSource('yellow-zones');
       if (red) red.setData(zonesToGeoJSON(data.red_zones));
       if (yellow) yellow.setData(zonesToGeoJSON(data.yellow_zones));
+      const hotspots = hotspotCollections(data);
+      map.getSource('red-hotspots')?.setData(hotspots.red);
+      map.getSource('yellow-hotspots')?.setData(hotspots.yellow);
     };
 
     const connect = () => {
@@ -285,6 +373,7 @@ const Map = ({ persona }) => {
 
     map.on('load', () => {
       addZoneLayers(map);
+      addHotspotLayers(map);
       connect();
       markerRef.current = new mapboxgl.Marker({ color: '#f97316' })
         .setLngLat([DEFAULT_CENTER.lng, DEFAULT_CENTER.lat])
@@ -312,6 +401,12 @@ const Map = ({ persona }) => {
   }, [focusLocation]);
 
   const panel = <AssessmentPanel assessment={assessment} loading={loading} error={error} point={point} />;
+  const clockBadge = (
+    <div className="absolute bottom-4 right-4 z-20 rounded-lg bg-slate-900/95 px-4 py-3 text-sm text-slate-200 shadow-xl">
+      <span className="mr-2 text-slate-400">Simulated time</span>
+      <span className="text-base font-semibold text-orange-300">{formatSimulatedTime(simulatedTime)}</span>
+    </div>
+  );
 
   if (!MAPBOX_TOKEN) {
     return (
@@ -322,6 +417,7 @@ const Map = ({ persona }) => {
         >
           Map unavailable: set VITE_MAPBOX_TOKEN in frontend/.env to load Mapbox.
         </div>
+        {clockBadge}
         {panel}
       </div>
     );
@@ -330,6 +426,7 @@ const Map = ({ persona }) => {
   return (
     <div className="relative w-full h-full">
       <LocationSearch onSelect={handleSearchSelect} />
+      {clockBadge}
       <div ref={mapContainer} className="h-full w-full" />
       {panel}
     </div>

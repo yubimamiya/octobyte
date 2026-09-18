@@ -10,6 +10,7 @@ from openai import AsyncOpenAI
 from dotenv import load_dotenv
 from fire_data import fetch_and_process_fire_data
 from hermes_agent import assess_location, make_client as make_hermes_client, HERMES_MODEL
+from simulated_clock import clock
 
 # Load OPENROUTER_API_KEY (and any other secrets) from backend/.env for local dev.
 # On Render the variable is set in the dashboard, so this is a no-op there.
@@ -19,8 +20,8 @@ if not os.getenv("OPENROUTER_API_KEY"):
     print("WARNING: OPENROUTER_API_KEY is not set. Copy backend/.env.example to backend/.env and add your key.")
 
 # Model is configurable so it can be swapped (e.g. to a Hermes model) without a code change.
-DEFAULT_MODEL = "meta-llama/llama-3-8b-instruct:free"
-MODEL = os.getenv("OPENROUTER_MODEL", DEFAULT_MODEL)
+OPENROUTER_MODEL="thinkingmachines/inkling:free"
+MODEL = os.getenv("OPENROUTER_MODEL", OPENROUTER_MODEL)
 
 app = FastAPI()
 
@@ -103,6 +104,7 @@ async def websocket_endpoint(websocket: WebSocket):
     try:
         while True:
             data = fetch_and_process_fire_data()
+            data["simulated_time"] = clock.isoformat()
             await websocket.send_json(data)
             # Fetch and update every 10 seconds (simulated live feed)
             await asyncio.sleep(10)
@@ -161,4 +163,14 @@ async def assess_endpoint(request: AssessRequest):
 
 @app.get("/")
 def read_root():
-    return {"status": "Backend is running live", "model": MODEL, "hermes_model": HERMES_MODEL}
+    return {
+        "status": "Backend is running live",
+        "model": MODEL,
+        "hermes_model": HERMES_MODEL,
+        "simulated_time": clock.isoformat(),
+    }
+
+
+@app.get("/api/time")
+def read_simulated_time():
+    return {"simulated_time": clock.isoformat()}
