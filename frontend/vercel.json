@@ -1,0 +1,12 @@
+{
+  "rewrites": [
+    {
+      "source": "/api/(.*)",
+      "destination": "https://YOUR-RENDER-BACKEND-URL.onrender.com/api/$1"
+    },
+    {
+      "source": "/ws/(.*)",
+      "destination": "wss://YOUR-RENDER-BACKEND-URL.onrender.com/ws/$1"
+    }
+  ]
+}
