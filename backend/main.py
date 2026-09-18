@@ -2,6 +2,7 @@ from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
+from typing import Any, Optional
 import asyncio
 import os
 import json
@@ -15,6 +16,10 @@ load_dotenv()
 
 if not os.getenv("OPENROUTER_API_KEY"):
     print("WARNING: OPENROUTER_API_KEY is not set. Copy backend/.env.example to backend/.env and add your key.")
+
+# Model is configurable so it can be swapped (e.g. to a Hermes model) without a code change.
+DEFAULT_MODEL = "meta-llama/llama-3-8b-instruct:free"
+MODEL = os.getenv("OPENROUTER_MODEL", DEFAULT_MODEL)
 
 app = FastAPI()
 
@@ -33,9 +38,51 @@ client = AsyncOpenAI(
     api_key=os.getenv("OPENROUTER_API_KEY", "your-openrouter-key")
 )
 
-# Chatbot Request Model
+BASE_SYSTEM_PROMPT = (
+    "You are a crisis-response AI agent for a wildfire emergency in Washington State. "
+    "Use simple, plain-language steps. Provide verified, personalized guidance based on the "
+    "user's persona (citizen, caregiver, firefighter)."
+)
+
+PERSONA_GUIDANCE = {
+    "citizen": "The user is a citizen. Prioritize evacuation routes, go-bag checklists, and where to get official updates.",
+    "caregiver": "The user is a caregiver responsible for others (children, elderly, patients). Prioritize mobility, medication, and shelter needs.",
+    "firefighter": "The user is a firefighter. Use operational language: staging areas, containment lines, wind and terrain considerations.",
+}
+
+
+# Chatbot Request Model.
+# The Vercel AI SDK posts UI messages shaped like {id, role, parts: [{type: 'text', text}]}
+# along with extra fields (id, trigger, messageId). Pydantic ignores the extras.
 class ChatRequest(BaseModel):
-    messages: list
+    messages: list[dict[str, Any]]
+    persona: Optional[str] = None
+
+
+def ui_message_to_openai(message: dict[str, Any]) -> Optional[dict[str, str]]:
+    """
+    Convert a Vercel AI SDK UI message (or a plain {role, content} message)
+    into the {role, content} shape the OpenAI-compatible API expects.
+    Returns None for messages with no text.
+    """
+    role = message.get("role")
+    if role not in ("user", "assistant"):
+        return None
+
+    content = message.get("content")
+    if not isinstance(content, str):
+        parts = message.get("parts") or []
+        content = "".join(
+            part.get("text", "")
+            for part in parts
+            if isinstance(part, dict) and part.get("type") == "text"
+        )
+
+    content = content.strip()
+    if not content:
+        return None
+    return {"role": role, "content": content}
+
 
 @app.websocket("/ws/fire-data")
 async def websocket_endpoint(websocket: WebSocket):
@@ -55,30 +102,38 @@ async def websocket_endpoint(websocket: WebSocket):
 @app.post("/api/chat")
 async def chat_endpoint(request: ChatRequest):
     """
-    Endpoint for Vercel AI SDK frontend. Streams AI responses.
+    Endpoint for Vercel AI SDK frontend. Streams AI responses as plain text,
+    which matches the frontend's TextStreamChatTransport.
     """
+    system_content = BASE_SYSTEM_PROMPT
+    persona = (request.persona or "").lower().strip()
+    if persona in PERSONA_GUIDANCE:
+        system_content += " " + PERSONA_GUIDANCE[persona]
+
+    system_msg = {"role": "system", "content": system_content}
+    history = [m for m in (ui_message_to_openai(msg) for msg in request.messages) if m]
+    messages = [system_msg] + history
+
     async def generate():
-        # Inject system prompt with context about the current fire
-        system_msg = {
-            "role": "system", 
-            "content": "You are a crisis-response AI agent. Use simple, plain-language steps. "
-                       "Provide verified, personalized guidance based on user persona (citizen, caregiver, firefighter)."
-        }
-        messages = [system_msg] + request.messages
+        try:
+            response = await client.chat.completions.create(
+                model=MODEL,
+                messages=messages,
+                stream=True,
+            )
+            async for chunk in response:
+                # Some providers send keep-alive chunks with no choices.
+                if not chunk.choices:
+                    continue
+                delta = chunk.choices[0].delta.content
+                if delta:
+                    yield delta
+        except Exception as exc:  # noqa: BLE001 - surface any provider error to the user
+            print(f"Chat error: {exc!r}")
+            yield f"\n[Agent error: {type(exc).__name__}: {exc}]"
 
-        response = await client.chat.completions.create(
-            model="meta-llama/llama-3-8b-instruct:free", # Change to a stronger model using your $100 budget
-            messages=messages,
-            stream=True
-        )
-        async for chunk in response:
-            if chunk.choices[0].delta.content is not None:
-                # Vercel AI SDK expects standard text streams by default, or specific data protocols.
-                # A simple text stream works for basic use cases.
-                yield chunk.choices[0].delta.content
-
-    return StreamingResponse(generate(), media_type="text/plain")
+    return StreamingResponse(generate(), media_type="text/plain; charset=utf-8")
 
 @app.get("/")
 def read_root():
-    return {"status": "Backend is running live"}
+    return {"status": "Backend is running live", "model": MODEL}
