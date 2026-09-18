@@ -6,7 +6,15 @@ import asyncio
 import os
 import json
 from openai import AsyncOpenAI
+from dotenv import load_dotenv
 from fire_data import fetch_and_process_fire_data
+
+# Load OPENROUTER_API_KEY (and any other secrets) from backend/.env for local dev.
+# On Render the variable is set in the dashboard, so this is a no-op there.
+load_dotenv()
+
+if not os.getenv("OPENROUTER_API_KEY"):
+    print("WARNING: OPENROUTER_API_KEY is not set. Copy backend/.env.example to backend/.env and add your key.")
 
 app = FastAPI()
 
