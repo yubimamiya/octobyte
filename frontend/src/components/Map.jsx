@@ -7,7 +7,9 @@ const WS_URL = import.meta.env.VITE_WS_URL || 'ws://localhost:8000/ws/fire-data'
 const CHAT_URL = import.meta.env.VITE_API_URL || 'http://localhost:8000/api/chat';
 const ASSESS_URL = import.meta.env.VITE_ASSESS_URL || CHAT_URL.replace(/\/api\/chat\/?$/, '/api/assess');
 const RECONNECT_MS = 3000;
-const DEFAULT_CENTER = { lng: -120.11, lat: 48.36 }; // Washington State
+// Paradise, California: centre of the Camp Fire incident data in backend/data.
+const DEFAULT_CENTER = { lng: -121.62, lat: 39.76 };
+const DEFAULT_ZOOM = 12;
 const INITIAL_SIMULATED_TIME = '2018-11-08T11:00:00';
 
 // Backend zones are [{id, coordinates: [[lng, lat], ...]}]. Convert to a GeoJSON
@@ -336,7 +338,7 @@ const Map = ({ persona }) => {
       container: mapContainer.current,
       style: 'mapbox://styles/mapbox/dark-v11',
       center: [DEFAULT_CENTER.lng, DEFAULT_CENTER.lat],
-      zoom: 10,
+      zoom: DEFAULT_ZOOM,
     });
     mapRef.current = map;
 

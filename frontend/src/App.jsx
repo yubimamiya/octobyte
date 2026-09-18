@@ -19,7 +19,7 @@ function App() {
         {/* Persona Selector */}
         <div className="absolute top-4 left-4 bg-slate-800 p-4 rounded-lg shadow-lg z-10">
           <h1 className="text-xl font-bold mb-2 text-orange-500">LiveFire Agent</h1>
-          <p className="text-sm text-gray-300">Simulating: Washington State</p>
+          <p className="text-sm text-gray-300">Simulating: Camp Fire, Paradise CA (Nov 8, 2018)</p>
           <div className="mt-4 flex flex-col gap-2">
             {PERSONAS.map((p) => (
               <button
